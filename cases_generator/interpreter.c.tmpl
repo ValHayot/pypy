@@ -1,0 +1,132 @@
+typedef struct {} PyObject;
+typedef struct {} PyThreadState;
+typedef struct {} _PyInterpreterFrame;
+typedef struct {} _Py_atomic_int;
+typedef struct {} _PyCFrame;
+typedef struct {} _Py_CODEUNIT;
+typedef struct {} binaryfunc;
+typedef struct {} PyLongObject;
+typedef struct {} destructor;
+typedef struct {} PyFloatObject;
+typedef struct {} _PyBinarySubscrCache;
+typedef struct {} _PyObject_Free;
+typedef struct {} Py_ssize_t;
+typedef struct {} PyTypeObject;
+typedef struct {} PyHeapTypeObject;
+typedef struct {} PyFunctionObject;
+typedef struct {} PyCodeObject;
+typedef struct {} PyListObject;
+typedef struct {} _PyStoreSubscrCache;
+typedef struct {} PyDictObject;
+typedef struct {} unaryfunc;
+typedef struct {} PyGenObject;
+typedef struct {} PySendResult;
+typedef struct {} _PyErr_StackItem;
+typedef struct {} PyStopIterationObject;
+typedef struct {} _PyUnpackSequenceCache;
+typedef struct {} _PyAttrCache;
+typedef struct {} _PyLoadGlobalCache;
+typedef struct {} PyDictUnicodeEntry;
+typedef struct {} PyDictOrValues;
+typedef struct {} PyModuleObject;
+typedef struct {} PyDictKeyEntry;
+typedef struct {} _PyLoadMethodCache;
+typedef struct {} PyDictValues;
+typedef struct {} _PyCompareOpCache;
+typedef struct {} _PyForIterCache;
+typedef struct {} _PyListIterObject;
+typedef struct {} _PyTupleIterObject;
+typedef struct {} PyTupleObject;
+typedef struct {} _PyRangeIterObject;
+typedef struct {} PyMethodObject;
+typedef struct {} _PyCallCache;
+typedef struct {} PyCFunction;
+typedef struct {} _PyCFunctionFast;
+typedef struct {} _PyCFunctionFastWithKeywords;
+typedef struct {} PyInterpreterState;
+typedef struct {} PyMethodDescrObject;
+typedef struct {} PyMethodDef;
+typedef struct {} _PyBinaryOpCache;
+
+
+const _PyObject_Free PyObject_Free;
+
+void _PyFloat_ExactDealloc(PyObject *);
+void _PyUnicode_ExactDealloc(PyObject *);
+
+#define TOP()             PEEK(1)
+#define SECOND()          PEEK(2)
+
+/* Local variable macros */
+#define GETLOCAL(i)     (frame->localsplus[i])
+// #define SETLOCAL(i, val)  \
+// do { \
+//     PyObject *_tmp = frame->localsplus[i]; \
+//     frame->localsplus[i] = (val); \
+//     Py_XDECREF(_tmp); \
+// } while (0)
+
+/* Flow control macros */
+#define TARGET(op) case ops.op:
+
+#define inst(name, ...) case name:
+#define op(name, ...) /* NAME is ignored */
+#define macro(name) static int MACRO_##name
+#define super(name) static int SUPER_##name
+#define family(name, ...) static int family_##name
+
+#define NAME_ERROR_MSG \
+    "name '%.200s' is not defined"
+
+// Dummy variables for stack effects.
+static PyObject *value, *value1, *value2, *left, *right, *res, *sum, *prod, *sub;
+static PyObject *container, *start, *stop, *v, *lhs, *rhs;
+static PyObject *list, *tuple, *dict, *owner;
+static PyObject *exit_func, *lasti, *val, *retval, *obj, *iter;
+static PyObject *aiter, *awaitable, *iterable, *w, *exc_value, *bc;
+static PyObject *orig, *excs, *update, *b, *fromlist, *level, *from;
+typedef __SIZE_TYPE__ size_t;
+static size_t jump;
+// Dummy variables for cache effects
+typedef unsigned short uint16_t;
+static uint16_t when_to_jump_mask, invert, counter, index, hint;
+typedef unsigned int uint32_t;
+static uint32_t type_version;
+typedef unsigned long uint64_t;
+// Dummy opcode names for 'op' opcodes
+#define _COMPARE_OP_FLOAT 1003
+#define _COMPARE_OP_INT 1004
+#define _COMPARE_OP_STR 1005
+#define _JUMP_IF 1006
+
+static PyObject *
+dummy_func(
+        PyThreadState *tstate,
+        _PyInterpreterFrame *frame,
+        unsigned char opcode,
+        unsigned int oparg,
+        _Py_atomic_int * const eval_breaker,
+        _PyCFrame cframe,
+        PyObject *names,
+        PyObject *consts,
+        _Py_CODEUNIT *next_instr,
+        PyObject **stack_pointer,
+        PyObject *kwnames,
+        int throwflag,
+        binaryfunc binary_ops[]
+)
+{
+    _PyInterpreterFrame  entry_frame;
+
+    switch (opcode) {
+        #CASES#
+    }
+    error:
+    exception_unwind:
+    handle_eval_breaker:
+    resume_frame:
+    resume_with_error:
+    start_frame:
+    unbound_local_error:
+    ;
+}
