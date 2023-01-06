@@ -19,7 +19,7 @@ DEFAULT_INPUT = os.path.relpath(
     os.path.join(os.path.dirname(__file__), "bytecodes.c")
 )
 DEFAULT_OUTPUT = os.path.relpath(
-    os.path.join(os.path.dirname(__file__), "generated_cases.c.h")
+    os.path.join(os.path.dirname(__file__), "generated_cases.h")
 )
 BEGIN_MARKER = "// BEGIN BYTECODES //"
 END_MARKER = "// END BYTECODES //"
@@ -719,8 +719,8 @@ def main():
     a.write_instructions()  # Raises OSError if output can't be written
 
     with open("interpreter.c.tmpl") as template, open(a.output_filename) as generated, open(
-            "generated_cases.h", "w") as final:
-        final.write(template.read().replace("#CASES#", generated.read()))
+            "generated_cases.c", "w") as final:
+        final.write(template.read().replace("/*CASES*/", generated.read()))
 
 
 if __name__ == "__main__":

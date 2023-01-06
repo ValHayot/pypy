@@ -670,6 +670,7 @@ class PyGenerator:
         else:
             return self.visit(n)
 
+
     def _parenthesize_if(self, n, condition):
         """Visits 'n' and returns its string representation, parenthesized
         if the condition function applied to the node returns True.

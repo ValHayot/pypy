@@ -1,73 +1,81 @@
-typedef struct {} PyObject;
-typedef struct {} PyThreadState;
-typedef struct {} _PyInterpreterFrame;
-typedef struct {} _Py_atomic_int;
-typedef struct {} _PyCFrame;
-typedef struct {} _Py_CODEUNIT;
-typedef struct {} binaryfunc;
-typedef struct {} PyLongObject;
-typedef struct {} destructor;
-typedef struct {} PyFloatObject;
-typedef struct {} _PyBinarySubscrCache;
-typedef struct {} _PyObject_Free;
-typedef struct {} Py_ssize_t;
-typedef struct {} PyTypeObject;
-typedef struct {} PyHeapTypeObject;
-typedef struct {} PyFunctionObject;
-typedef struct {} PyCodeObject;
-typedef struct {} PyListObject;
-typedef struct {} _PyStoreSubscrCache;
-typedef struct {} PyDictObject;
-typedef struct {} unaryfunc;
-typedef struct {} PyGenObject;
-typedef struct {} PySendResult;
-typedef struct {} _PyErr_StackItem;
-typedef struct {} PyStopIterationObject;
-typedef struct {} _PyUnpackSequenceCache;
-typedef struct {} _PyAttrCache;
-typedef struct {} _PyLoadGlobalCache;
-typedef struct {} PyDictUnicodeEntry;
-typedef struct {} PyDictOrValues;
-typedef struct {} PyModuleObject;
-typedef struct {} PyDictKeyEntry;
-typedef struct {} _PyLoadMethodCache;
-typedef struct {} PyDictValues;
-typedef struct {} _PyCompareOpCache;
-typedef struct {} _PyForIterCache;
-typedef struct {} _PyListIterObject;
-typedef struct {} _PyTupleIterObject;
-typedef struct {} PyTupleObject;
-typedef struct {} _PyRangeIterObject;
-typedef struct {} PyMethodObject;
-typedef struct {} _PyCallCache;
-typedef struct {} PyCFunction;
-typedef struct {} _PyCFunctionFast;
-typedef struct {} _PyCFunctionFastWithKeywords;
-typedef struct {} PyInterpreterState;
-typedef struct {} PyMethodDescrObject;
-typedef struct {} PyMethodDef;
-typedef struct {} _PyBinaryOpCache;
+
+#define __attribute__(x)
+#define PyAPI_FUNC(RTYPE) Py_EXPORTED_SYMBOL RTYPE
+#define _Py_CAST(type, expr) ((type)(expr))
+
+#include "Python.h"
+
+#include "before.h"
 
 
-const _PyObject_Free PyObject_Free;
+#include "dictobject.h"
+#include "pycore_abstract.h" // _PyIndex_Check()
+#include "pycore_call.h"     // _PyObject_FastCallDictTstate()
+#include "pycore_ceval.h"    // _PyEval_SignalAsyncExc()
+#include "pycore_code.h"
+#include "pycore_emscripten_signal.h" // _Py_CHECK_EMSCRIPTEN_SIGNALS
+#include "pycore_function.h"
+#include "pycore_long.h"         // _PyLong_GetZero()
+#include "pycore_moduleobject.h" // PyModuleObject
+#include "pycore_object.h"       // _PyObject_GC_TRACK()
+#include "pycore_opcode.h"       // EXTRA_CASES
+#include "pycore_pyerrors.h"     // _PyErr_Fetch()
+#include "pycore_pymem.h"        // _PyMem_IsPtrFreed()
+#include "pycore_pystate.h"      // _PyInterpreterState_GET()
+#include "pycore_range.h"        // _PyRangeIterObject
+#include "pycore_sliceobject.h"  // _PyBuildSlice_ConsumeRefs
+#include "pycore_sysmodule.h"    // _PySys_Audit()
+#include "pycore_tuple.h"        // _PyTuple_ITEMS()
+
+
+#include "opcode.h"
+#include "pycore_dict.h"
+//#include "pycore_frame.h"
+//#include "pydtrace.h"
+#include "setobject.h"
+#include "structmember.h" // struct PyMemberDef, T_OFFSET_EX
+
+
+#include "after.h"
 
 void _PyFloat_ExactDealloc(PyObject *);
 void _PyUnicode_ExactDealloc(PyObject *);
 
-#define TOP()             PEEK(1)
-#define SECOND()          PEEK(2)
+/* Stack effect macros
+ * These will be mostly replaced by stack effect descriptions,
+ * but the tooling need to recognize them.
+ */
+#define SET_TOP(v) SET_TOP(v)
+#define SET_SECOND(v) SET_SECOND(v)
+#define PEEK(n) PEEK(n)
+#define POKE(n, v) POKE(n, v)
+#define PUSH(val) PUSH(val)
+#define POP() POP()
+#define TOP() TOP()
+#define SECOND() SECOND()
+#define STACK_GROW(n) STACK_GROW(n)
+#define STACK_SHRINK(n) STACK_SHRINK(n)
+#define EMPTY() EMPTY()
+#define STACK_LEVEL() STACK_LEVEL()
+#define DISPATCH() DISPATCH()
+#define PY_VECTORCALL_ARGUMENTS_OFFSET 1
 
 /* Local variable macros */
-#define GETLOCAL(i)     (frame->localsplus[i])
-// #define SETLOCAL(i, val)  \
-// do { \
-//     PyObject *_tmp = frame->localsplus[i]; \
-//     frame->localsplus[i] = (val); \
-//     Py_XDECREF(_tmp); \
-// } while (0)
+#define GETLOCAL(i) (frame->localsplus[i])
+//#define SETLOCAL(i, val)                                                       \
+//  do {                                                                         \
+//    PyObject *_tmp = frame->localsplus[i];                                     \
+//    frame->localsplus[i] = (val);                                              \
+//    Py_XDECREF(_tmp);                                                          \
+//  } while (0)
 
 /* Flow control macros */
-#define TARGET(op) case ops.op:
+#define TARGET(op) case #op:
+#define DEOPT_IF(cond, instname) ((void)0)
+#define ERROR_IF(cond, labelname) ((void)0)
+#define JUMPBY(offset) ((void)0)
+#define GO_TO_INSTRUCTION(instname) ((void)0)
+#define DISPATCH_SAME_OPARG() ((void)0)
 
 #define inst(name, ...) case name:
 #define op(name, ...) /* NAME is ignored */
@@ -75,58 +83,90 @@ void _PyUnicode_ExactDealloc(PyObject *);
 #define super(name) static int SUPER_##name
 #define family(name, ...) static int family_##name
 
-#define NAME_ERROR_MSG \
-    "name '%.200s' is not defined"
+#define NAME_ERROR_MSG "name '%.200s' is not defined"
 
 // Dummy variables for stack effects.
-static PyObject *value, *value1, *value2, *left, *right, *res, *sum, *prod, *sub;
+static PyObject *value, *value1, *value2, *left, *right, *res, *sum, *prod,
+    *sub;
 static PyObject *container, *start, *stop, *v, *lhs, *rhs;
 static PyObject *list, *tuple, *dict, *owner;
 static PyObject *exit_func, *lasti, *val, *retval, *obj, *iter;
 static PyObject *aiter, *awaitable, *iterable, *w, *exc_value, *bc;
 static PyObject *orig, *excs, *update, *b, *fromlist, *level, *from;
-typedef __SIZE_TYPE__ size_t;
 static size_t jump;
 // Dummy variables for cache effects
-typedef unsigned short uint16_t;
 static uint16_t when_to_jump_mask, invert, counter, index, hint;
-typedef unsigned int uint32_t;
 static uint32_t type_version;
-typedef unsigned long uint64_t;
 // Dummy opcode names for 'op' opcodes
 #define _COMPARE_OP_FLOAT 1003
 #define _COMPARE_OP_INT 1004
 #define _COMPARE_OP_STR 1005
 #define _JUMP_IF 1006
 
-static PyObject *
-dummy_func(
-        PyThreadState *tstate,
-        _PyInterpreterFrame *frame,
-        unsigned char opcode,
-        unsigned int oparg,
-        _Py_atomic_int * const eval_breaker,
-        _PyCFrame cframe,
-        PyObject *names,
-        PyObject *consts,
-        _Py_CODEUNIT *next_instr,
-        PyObject **stack_pointer,
-        PyObject *kwnames,
-        int throwflag,
-        binaryfunc binary_ops[]
-)
-{
-    _PyInterpreterFrame  entry_frame;
+static PyObject *interpreter(PyThreadState *tstate, _PyInterpreterFrame *frame,
+                            unsigned char opcode, unsigned int oparg,
+                            _Py_atomic_int *const eval_breaker,
+                            _PyCFrame cframe, PyObject *names, PyObject *consts,
+                            _Py_CODEUNIT *next_instr, PyObject **stack_pointer,
+                            PyObject *kwnames, int throwflag,
+                            binaryfunc binary_ops[]) {
+  _PyInterpreterFrame entry_frame;
 
-    switch (opcode) {
-        #CASES#
-    }
-    error:
-    exception_unwind:
-    handle_eval_breaker:
-    resume_frame:
-    resume_with_error:
-    start_frame:
-    unbound_local_error:
-    ;
+  switch (opcode) {
+    /*CASES*/
+  }
+error:
+exception_unwind:
+handle_eval_breaker:
+resume_frame:
+resume_with_error:
+start_frame:
+unbound_local_error:;
+pop_4_error:
+  STACK_SHRINK(1);
+pop_3_error:
+  STACK_SHRINK(1);
+pop_2_error:
+  STACK_SHRINK(1);
+pop_1_error:
+  STACK_SHRINK(1);
 }
+
+// Future families go below this point //
+
+family(call) = {CALL,
+                CALL_PY_EXACT_ARGS,
+                CALL_PY_WITH_DEFAULTS,
+                CALL_BOUND_METHOD_EXACT_ARGS,
+                CALL_BUILTIN_CLASS,
+                CALL_BUILTIN_FAST_WITH_KEYWORDS,
+                CALL_METHOD_DESCRIPTOR_FAST_WITH_KEYWORDS,
+                CALL_NO_KW_BUILTIN_FAST,
+                CALL_NO_KW_BUILTIN_O,
+                CALL_NO_KW_ISINSTANCE,
+                CALL_NO_KW_LEN,
+                CALL_NO_KW_LIST_APPEND,
+                CALL_NO_KW_METHOD_DESCRIPTOR_FAST,
+                CALL_NO_KW_METHOD_DESCRIPTOR_NOARGS,
+                CALL_NO_KW_METHOD_DESCRIPTOR_O,
+                CALL_NO_KW_STR_1,
+                CALL_NO_KW_TUPLE_1,
+                CALL_NO_KW_TYPE_1};
+family(for_iter) = {FOR_ITER, FOR_ITER_LIST, FOR_ITER_RANGE};
+family(load_attr) = {LOAD_ATTR,
+                     LOAD_ATTR_CLASS,
+                     LOAD_ATTR_GETATTRIBUTE_OVERRIDDEN,
+                     LOAD_ATTR_INSTANCE_VALUE,
+                     LOAD_ATTR_MODULE,
+                     LOAD_ATTR_PROPERTY,
+                     LOAD_ATTR_SLOT,
+                     LOAD_ATTR_WITH_HINT,
+                     LOAD_ATTR_METHOD_LAZY_DICT,
+                     LOAD_ATTR_METHOD_NO_DICT,
+                     LOAD_ATTR_METHOD_WITH_DICT,
+                     LOAD_ATTR_METHOD_WITH_VALUES};
+family(load_global) = {LOAD_GLOBAL, LOAD_GLOBAL_BUILTIN, LOAD_GLOBAL_MODULE};
+family(store_fast) = {STORE_FAST, STORE_FAST__LOAD_FAST,
+                      STORE_FAST__STORE_FAST};
+family(unpack_sequence) = {UNPACK_SEQUENCE, UNPACK_SEQUENCE_LIST,
+                           UNPACK_SEQUENCE_TUPLE, UNPACK_SEQUENCE_TWO_TUPLE};
