@@ -1,6 +1,7 @@
 """C AST generalization."""
 import ast
 import logging
+import re
 import typing as t
 from typing import Dict, Any
 
@@ -35,6 +36,10 @@ STANDALONE_EXPRESSION_TYPES = (
 )
 
 
+def reserved_py_kwords(s):
+    return {"from": "from_", "def": "def_", "self": "self_"}.get(s, s)
+
+
 def fix_stmts_in_body(stmts: t.List[typed_ast3.AST]) -> t.List[typed_ast3.AST]:
     assert isinstance(stmts, list)
     if not stmts:
@@ -64,7 +69,9 @@ def make_range_call(
         assert isinstance(begin, typed_ast3.AST), begin
         args = [begin, end, step]
     return typed_ast3.Call(
-        func=typed_ast3.Name(id="range", ctx=typed_ast3.Load()), args=args or [], keywords=[]
+        func=typed_ast3.Name(id="range", ctx=typed_ast3.Load()),
+        args=args or [],
+        keywords=[],
     )
 
 
@@ -80,6 +87,12 @@ def _node_debug(node: c_ast.Node):
 
 def _node_str(node: c_ast.Node):
     return "{}({})".format(type(node), {_: getattr(node, _) for _ in node.__slots__})
+
+
+def incr(s):
+    if incr := re.match(f"pre_incr|pre_decr|post_incr|post_decr", s):
+        return s[slice(*incr.regs[0])].split("_")
+    return None
 
 
 C_UNARY_OPERATORS_TO_PYTHON = {
@@ -163,31 +176,33 @@ class CAstGeneralizerBackend(
 
     def visit_FuncDef(
         self, node
-    ) -> typed_ast3.FunctionDef:  # pylint: disable=invalid-name
+    ) -> typed_ast3.ClassDef:  # pylint: disable=invalid-name
         """Transform FuncDef."""
         assert node.decl is not None
         name, args, return_type = self.visit(node.decl)
-        param_decls = self.visit(node.param_decls)
-        if param_decls is not None:
-            raise NotImplementedError(_node_debug(node.param_decls), str(param_decls))
         body = self.visit(node.body)
-        assert isinstance(body, list) and body
-        _ = self.visit(node.coord)
-        funcdef = typed_ast3.FunctionDef(
-            lineno=node.coord.line,
-            name=name,
-            args=args,
-            body=fix_stmts_in_body(body),
-            decorator_list=[],
-            returns=return_type,
+        args = [ast.Expr(a) for a in args.args]
+        self.field_names = [a.value.arg for a in args]
+
+        return ast.ClassDef(
+            "Interpreter", body=args + body, decorator_list=[], bases=[], keywords=[]
         )
-        return funcdef
 
     def visit_FuncDecl(  # pylint: disable=invalid-name
         self, node
     ) -> t.Tuple[str, typed_ast3.arguments, typed_ast3.AST]:
         """Return a tuple: function name, its declared arguments and its return type"""
         args = self.visit(node.args)
+        if args is None:
+            args = typed_ast3.arguments(
+                posonlyargs=[],
+                args=[],
+                vararg=None,
+                kwonlyargs=[],
+                kwarg=None,
+                defaults=[],
+                kw_defaults=[],
+            )
         assert isinstance(args, typed_ast3.arguments)
         name, return_type = self.visit(node.type)
         assert isinstance(name, str)
@@ -202,14 +217,14 @@ class CAstGeneralizerBackend(
     ) -> typed_ast3.arguments:  # pylint: disable=invalid-name
         """Transform ParamList."""
         params = [self.visit(subnode) for subnode in node.params]
-        # assert all(isinstance(param, tuple) for param in params), params
-        # params = [typed_ast3.arg(arg=param[0], annotation=param[1]) for param in params]
         assert all(isinstance(param, typed_ast3.AnnAssign) for param in params), params
         assert all(
             isinstance(param.target, typed_ast3.Name) for param in params
         ), params
         params = [
-            typed_ast3.arg(arg=param.target.id, annotation=param.annotation)
+            typed_ast3.arg(
+                arg=reserved_py_kwords(param.target.id), annotation=param.annotation
+            )
             for param in params
         ]
         _ = self.visit(node.coord)
@@ -236,9 +251,10 @@ class CAstGeneralizerBackend(
         if isinstance(init, typed_ast3.Assign):
             assert len(init.targets) == 1
             target = init.targets[0]
+            begin = init.value
         else:
             target = init.target
-        begin = init.value
+            begin = init.value
         assert isinstance(target, typed_ast3.Name)
         cond = self.visit(node.cond)
         assert isinstance(cond, typed_ast3.Compare)
@@ -248,18 +264,19 @@ class CAstGeneralizerBackend(
         end = cond.comparators[0]
         assert cond.left.id == target.id
         next_ = self.visit(node.next)
-        assert isinstance(next_, typed_ast3.AugAssign)
-        step = next_.value
-        assert isinstance(step, typed_ast3.Num)
+        assert isinstance(next_, ast.Call) and incr(
+            ast.unparse(next_.func)
+        ), ast.unparse(next_.func)
 
         # todo check this thinking
         if isinstance(cond.ops[0], typed_ast3.Lt):
-            assert isinstance(next_.op, typed_ast3.Add)
-            iter_ = make_range_call(begin, end, step)
+            iter_ = make_range_call(begin, end, None)
         elif isinstance(cond.ops[0], typed_ast3.Gt):
-            assert isinstance(next_.op, typed_ast3.Sub)
-            step.n = -step.n
-            iter_ = make_range_call(end, begin, step)
+            _, incr_decr = incr(ast.unparse(next_.func))
+            assert incr_decr == "decr", incr_decr
+            iter_ = make_range_call(begin, end, ast.Num(-1))
+        else:
+            raise Exception(f"unknown op: {cond.ops[0]}")
 
         stmt = self.visit(node.stmt)
         assert stmt is not None
@@ -268,7 +285,10 @@ class CAstGeneralizerBackend(
         _ = self.visit(node.coord)
         return typed_ast3.For(
             lineno=node.coord.line,
-            target=target, iter=iter_, body=fix_stmts_in_body(stmt), orelse=[]
+            target=target,
+            iter=iter_,
+            body=fix_stmts_in_body(stmt),
+            orelse=[],
         )
 
     def visit_If(self, node):  # pylint: disable=invalid-name
@@ -287,15 +307,15 @@ class CAstGeneralizerBackend(
                 iffalse = [iffalse]
             iffalse = fix_stmts_in_body(iffalse)
         _ = self.visit(node.coord)
-        if isinstance(iftrue, str) or isinstance(iffalse, str) or isinstance(cond, str):
-            print(iftrue, iffalse)
-            raise
-        if any(isinstance(b, str) for b in iftrue):
-            print(iftrue)
-            raise
-        if any(isinstance(b, str) for b in iffalse):
-            print(iffalse)
-            raise
+        # if isinstance(iftrue, str) or isinstance(iffalse, str) or isinstance(cond, str):
+        #     print(iftrue, iffalse)
+        #     raise
+        # if any(isinstance(b, str) for b in iftrue):
+        #     print(iftrue)
+        #     raise
+        # if any(isinstance(b, str) for b in iffalse):
+        #     print(iffalse)
+        #     raise
         return typed_ast3.If(test=cond, body=iftrue, orelse=iffalse)
 
     def visit_Compound(self, node):  # pylint: disable=invalid-name
@@ -307,25 +327,68 @@ class CAstGeneralizerBackend(
     def visit_BinaryOp(self, node):  # pylint: disable=invalid-name
         """Transform BinaryOp."""
         op_type, op_ = C_BINARY_OPERATORS_TO_PYTHON[node.op]
+        op = op_()
         left = self.visit(node.left)
         right = self.visit(node.right)
+        res = []
+        left_assign = False
+        if isinstance(left, (ast.AugAssign, ast.Assign)):
+            left_assign = True
+            res.append(left)
+
+        right_assign = False
+        if isinstance(right, (ast.AugAssign, ast.Assign)):
+            right_assign = True
+            res.append(right)
+
         _ = self.visit(node.coord)
+
+        left = left.target if left_assign else left
+        right = right.target if right_assign else right
         if op_type is typed_ast3.BinOp:
-            if isinstance(left, list):
-                print(node.coord.line)
-                print(left, right)
-                raise
-            return op_type(left=left, op=op_(), right=right)
-        if op_type is typed_ast3.Compare:
-            return op_type(left=left, ops=[op_()], comparators=[right])
-        if op_type is typed_ast3.BoolOp:
-            return op_type(op=op_(), values=[left, right])
-        return self.generic_visit(node)
+            res.append(op_type(left=left, op=op_(), right=right))
+        elif op_type is typed_ast3.Compare:
+            if isinstance(op, (ast.Eq, ast.NotEq)) and ast.unparse(right) == "NULL":
+                op = ast.Is()
+            res.append(
+                op_type(
+                    left=left,
+                    ops=[op],
+                    comparators=[right],
+                )
+            )
+        elif op_type is typed_ast3.BoolOp:
+            res.append(
+                op_type(
+                    op=op,
+                    values=[left, right],
+                )
+            )
+        else:
+            res.append(self.generic_visit(node))
+
+        if len(res) == 1:
+            res = res[0]
+        return res
 
     def visit_UnaryOp(self, node):  # pylint: disable=invalid-name
         """Transform UnaryOp."""
         op_type, op_ = C_UNARY_OPERATORS_TO_PYTHON[node.op]
         expr = self.visit(node.expr)
+        if node.op in {"&", "*"}:
+            return expr
+
+        if node.op == "p--":
+            # post
+            return ast.Call(ast.Name("post_decr"), args=[expr], keywords=[])
+        if node.op == "p++":
+            # post
+            return ast.Call(ast.Name("post_incr"), args=[expr], keywords=[])
+        if node.op == "--":
+            return ast.Call(ast.Name("pre_decr"), args=[expr], keywords=[])
+        if node.op == "++":
+            return ast.Call(ast.Name("pre_decr"), args=[expr], keywords=[])
+
         _ = self.visit(node.coord)
         if op_type is typed_ast3.Call:
             return op_type(
@@ -333,12 +396,6 @@ class CAstGeneralizerBackend(
                 args=[expr],
                 keywords=[],
             )
-        if op_type is typed_ast3.AugAssign:
-            if isinstance(op_(), typed_ast3.Not):
-                print(expr, op_(), node.coord.line)
-                raise
-            return op_type(target=expr, op=op_(), value=typed_ast3.Num(n=1))
-            # raise NotImplementedError()
         return op_type(op=op_(), operand=expr)
 
     def visit_Cast(self, node):  # pylint: disable=invalid-name
@@ -346,11 +403,12 @@ class CAstGeneralizerBackend(
         to_type = self.visit(node.to_type)
         expr = self.visit(node.expr)
         _ = self.visit(node.coord)
-        return typed_ast3.Call(
-            func=typed_ast3.Name(id="cast", ctx=typed_ast3.Load()),
-            args=[expr],
-            keywords=[typed_ast3.keyword(arg="type", value=to_type)],
-        )
+        return expr
+        # return typed_ast3.Call(
+        #     func=typed_ast3.Name(id="cast", ctx=typed_ast3.Load()),
+        #     args=[expr],
+        #     keywords=[typed_ast3.keyword(arg="type", value=to_type)],
+        # )
 
     def visit_ID(self, node):  # pylint: disable=invalid-name
         name = node.name
@@ -380,9 +438,18 @@ class CAstGeneralizerBackend(
         assert isinstance(rvalue, typed_ast3.AST)
         _ = self.visit(node.coord)
         if op_type is typed_ast3.Assign:
-            return op_type(targets=[lvalue], value=rvalue, type_comment=None,
-                           lineno=node.coord.line,
-                           )
+            if isinstance(rvalue, typed_ast3.Assign):
+                targets = [lvalue, rvalue.targets[0]]
+                value = rvalue.value
+            else:
+                targets = [lvalue]
+                value = rvalue
+            return op_type(
+                targets=targets,
+                value=value,
+                type_comment=None,
+                lineno=node.coord.line,
+            )
         return op_type(target=lvalue, op=op_(), value=rvalue, lineno=node.coord.line)
 
     def visit_Decl(
@@ -393,6 +460,7 @@ class CAstGeneralizerBackend(
     ]:
         """Transform Decl."""
         name = node.name
+        name = reserved_py_kwords(name)
         assert isinstance(name, str), type(name)
         quals = node.quals
         if quals:
@@ -415,8 +483,6 @@ class CAstGeneralizerBackend(
         init = self.visit(node.init)
         if init is not None:
             assert isinstance(node.type, INITIALIZABLE_DECLARATIONS)
-            # assert isinstance(node.type, c_ast.TypeDecl), type(node.type)
-            # raise NotImplementedError(_node_debug(node.init), str(init))
         bitsize = self.visit(node.bitsize)
         if bitsize is not None:
             raise NotImplementedError(_node_debug(node.bitsize), str(bitsize))
@@ -425,11 +491,10 @@ class CAstGeneralizerBackend(
             init.elts = list(filter(None, init.elts))
             if not init.elts:
                 _LOG.warning(f"no elements in list initializer {node.coord.line}")
-                print("wtfbbq")
         if init is not None or isinstance(node.type, INITIALIZABLE_DECLARATIONS):
             name_, type_ = type_data
+            name_ = reserved_py_kwords(name_)
             assert name_ == name
-            print(type_)
             return typed_ast3.AnnAssign(
                 lineno=node.coord.line,
                 target=typed_ast3.Name(id=name_, ctx=typed_ast3.Store()),
@@ -452,17 +517,21 @@ class CAstGeneralizerBackend(
         assert isinstance(type_, typed_ast3.Name), type(type_)
         for qual in quals:
             assert isinstance(qual, str)
-            type_ = typed_ast3.Subscript(
-                value=typed_ast3.Attribute(
-                    value=typed_ast3.Name(id="st", ctx=typed_ast3.Load()),
-                    attr=qual.title(),
-                    ctx=typed_ast3.Load(),
-                ),
-                slice=typed_ast3.Index(value=type_),
-                ctx=typed_ast3.Load(),
-            )
         _ = self.visit(node.coord)
         return declname, type_
+
+    type_map = {
+        "unsigned_int": "int",
+        "unsigned_char": "str",
+        "double": "float",
+        "uint32_t": "int",
+        "uint16_t": "int",
+        "uint64_t": "int",
+        "char": "str",
+        "size_t": "int",
+        "true": "True",
+        "long": "int",
+    }
 
     def visit_IdentifierType(
         self, node
@@ -474,6 +543,7 @@ class CAstGeneralizerBackend(
             names = ["_".join(names)]
         assert len(names) == 1, names
         name = names[0]
+        name = self.type_map.get(name, name)
         assert isinstance(name, str)
         _ = self.visit(node.coord)
         return typed_ast3.Name(id=name, ctx=typed_ast3.Load())
@@ -494,18 +564,13 @@ class CAstGeneralizerBackend(
             raise NotImplementedError(_node_debug(node.dim_quals), str(dim_quals))
         _ = self.visit(node.coord)
         return name, typed_ast3.Subscript(
-            value=typed_ast3.Attribute(
-                value=typed_ast3.Name(id="st", ctx=typed_ast3.Load()),
-                attr="ndarray",
-                ctx=typed_ast3.Load(),
-            ),
-            slice=typed_ast3.ExtSlice(
-                dims=[
-                    typed_ast3.Index(value=typed_ast3.Ellipsis()),
-                    typed_ast3.Index(value=type_)  # ,
-                    # typed_ast3.Index(value=typed_ast3.Tuple(n=-1))
-                ]
-            ),
+            # value=typed_ast3.Attribute(
+            #     value=typed_ast3.Name(id="st", ctx=typed_ast3.Load()),
+            #     attr="ndarray",
+            #     ctx=typed_ast3.Load(),
+            # ),
+            value=typed_ast3.Name(id="List", ctx=typed_ast3.Load()),
+            slice=type_,
             ctx=typed_ast3.Load(),
         )
 
@@ -523,31 +588,32 @@ class CAstGeneralizerBackend(
         if quals:
             _LOG.warning("ignoring unsupported C grammar: %s", quals)
         name, type_ = self.visit(node.type)
+        name = reserved_py_kwords(name)
         assert name is None or isinstance(name, str)
         assert isinstance(type_, typed_ast3.AST), type(type_)
         _ = self.visit(node.coord)
         # assert type_ is not None, _node_str(node)
-        return name, typed_ast3.Subscript(
-            value=typed_ast3.Attribute(
-                value=typed_ast3.Name(id="st", ctx=typed_ast3.Load()),
-                attr="Pointer",
-                ctx=typed_ast3.Load(),
-            ),
-            slice=typed_ast3.Index(value=type_),
-            ctx=typed_ast3.Load(),
-        )
+        return name, type_
 
     def visit_FuncCall(self, node) -> typed_ast3.Call:  # pylint: disable=invalid-name
         """Return a call."""
         name = self.visit(node.name)
         assert isinstance(
             name, (typed_ast3.Name, typed_ast3.Call, typed_ast3.Subscript)
-        ) or (
-            isinstance(name, typed_ast3.Attribute)
-        ), name
-        args = self.visit(node.args)
+        ) or (isinstance(name, typed_ast3.Attribute)), name
+        args = self.visit(node.args) or []
+        for a in args:
+            if isinstance(a, ast.Name):
+                a.id = reserved_py_kwords(a.id)
         _ = self.visit(node.coord)
-        return typed_ast3.Call(func=name, args=args or [], keywords=[])
+        if ast.unparse(name) == "assert":
+            if len(args) == 1:
+                return ast.Assert(args[0])
+            elif len(args) == 2:
+                return ast.Assert(args[0], args[1])
+            else:
+                raise Exception("unknown number of args in assert")
+        return typed_ast3.Call(func=name, args=args, keywords=[])
 
     def visit_ExprList(
         self, node
@@ -616,9 +682,6 @@ class CAstGeneralizerBackend(
         cases = []
         for case in node.stmt:
             cases.append(self.visit(case))
-            print(cases[-1])
-            print(case.coord.line)
-            print(ast.unparse(cases[-1]))
 
         subject = self.visit(node.cond)
         return ast.Match(subject, cases)
@@ -628,31 +691,43 @@ class CAstGeneralizerBackend(
         body = [self.visit(s) for s in node.stmts]
         if isinstance(body, list) and len(body) == 1:
             body = body[0]
-        if body is None or cond is None:
-            print(node.coord.line)
-            raise
         return ast.match_case(pattern=cond, guard=None, body=body)
 
+        # print(cond)
+        # if isinstance(cond, ast.Name):
+        #     cond = cond.id
+        # else:
+        #     cond = cond.value
+        # print(cond)
+        # return ast.FunctionDef(name=str(cond), args=[ast.Name("self")], body=body, decorator_list=[], lineno=node.coord.line)
+
     def visit_Default(self, node: c_ast.Default):
-        body = [self.visit(s) for s in node.stmts]
+        body = [typed_ast3.Expr(self.visit(s)) for s in node.stmts]
         if not body:
             raise
-        return ast.match_case(pattern=typed_ast3.Constant(True), guard=None, body=body)
+        return ast.match_case(pattern=typed_ast3.MatchAs(), guard=None, body=body)
 
     def visit_Label(self, n):
-        return ast.Constant("# label: n.name")
+        body = self.visit(n.stmt)
+        if isinstance(body, ast.Constant):
+            assert "666" == ast.unparse(body)
+            body = ast.Pass()
+        return ast.ClassDef(
+            name=n.name,
+            bases=[ast.Name("Exception")],
+            decorator_list=[],
+            body=[body],
+            keywords=[],
+        )
         # return typed_ast3.Return("label: " + n.name + ":\n" + self._generate_stmt(n.stmt))
 
     def visit_Goto(self, n):
-        return typed_ast3.Constant("break # goto " + n.name)
+        return ast.parse(f"raise Interpreter.{n.name}")
 
     def visit_StructRef(self, n):
         sref = self.visit(n.name)
         field = self.visit(n.field)
         assert n.type in {".", "->"}, f"unknown struct ref type {n.type}"
-        if sref is None:
-            print(n, sref, field)
-            raise
         if isinstance(sref, list):
             sref = sref[0]
         return typed_ast3.Attribute(value=sref, attr=field.id, ctx=typed_ast3.Load())
@@ -661,13 +736,10 @@ class CAstGeneralizerBackend(
         test = self.visit(n.iftrue)
         body = self.visit(n.cond)
         orelse = self.visit(n.iffalse)
-        if test is None or body is None or orelse is None:
-            print(test, body, orelse, n.coord.line)
-            raise
         return typed_ast3.IfExp(test, body, orelse)
 
     def visit_EmptyStatement(self, n):
-        return typed_ast3.Pass()
+        return typed_ast3.Constant(666)
 
     def visit_StaticAssert(self, n):
         cond = self.visit(n.cond)
@@ -688,10 +760,48 @@ class CAstGeneralizerBackend(
     def visit_While(self, n):
         cond = self.visit(n.cond)
         body = self.visit(n.stmt)
-        if isinstance(
-            cond, (typed_ast3.Assign, typed_ast3.AnnAssign, typed_ast3.AugAssign)
-        ):
-            return typed_ast3.While(test=typed_ast3.Expr(cond.target), body=body + [cond], orelse=[])
+        if incr_ := incr(ast.unparse(cond)):
+            pre_post, incr_decr = incr_
+            op = ast.Add() if incr_decr == "incr" else ast.Sub()
+            one = ast.Num(1)
+            if isinstance(cond, ast.Call):
+                target = cond.args[0]
+                assign = ast.AugAssign(target, op, one)
+                if pre_post == "pre":
+                    cond = ast.NameConstant(True)
+                    body = [
+                        ast.If(ast.UnaryOp(ast.Not(), target), [ast.Break()], []),
+                        assign,
+                    ] + body
+                    return typed_ast3.While(cond, body, [])
+                elif pre_post == "post":
+                    cond = ast.NameConstant(True)
+                    body = [
+                        assign,
+                        ast.If(ast.UnaryOp(ast.Not(), target), [ast.Break()], []),
+                    ] + body
+                    return typed_ast3.While(cond, body, [])
+            if isinstance(cond, ast.Compare):
+                assert isinstance(cond.left, ast.Call)
+                target = cond.left.args[0]
+                assign = ast.AugAssign(target, op, one)
+                if pre_post == "pre":
+                    body = [
+                        assign,
+                        ast.parse(
+                            f"if not {ast.unparse(cond).replace(pre_post, '').replace(incr_decr, '' ).replace('_', '')}: break"
+                        ),
+                    ] + body
+                    return typed_ast3.While(ast.NameConstant(True), body, [])
+                elif pre_post == "post":
+                    body = [
+                        ast.parse(
+                            f"if not {ast.unparse(cond).replace(pre_post, '').replace(incr_decr, '' ).replace('_', '')}: break"
+                        ),
+                        assign,
+                    ] + body
+                    return typed_ast3.While(ast.NameConstant(True), body, [])
+
         return typed_ast3.While(cond, body, [])
 
     def visit_InitList(self, n):
@@ -720,6 +830,8 @@ class CAstGeneralizerBackend(
             # return "(" + self.visit(n) + ")"
             # else:
             return self.visit(n)
+        else:
+            return self.visit(n)
 
     def _parenthesize_if(self, n, condition):
         """Visits 'n' and returns its string representation, parenthesized
@@ -743,3 +855,135 @@ class CAstGeneralizerBackend(
             n,
             (c_ast.Constant, c_ast.ID, c_ast.ArrayRef, c_ast.StructRef, c_ast.FuncCall),
         )
+
+
+class FixupMatchsVisitor(
+    ast.NodeTransformer
+):  # pylint: disable=too-many-public-methods
+    def visit_ClassDef(self, node: ast.ClassDef) -> Any:
+        for i, n in enumerate(node.body):
+            self.visit(n)
+
+        from typed_ast import ast3
+
+        ast3.FunctionDef
+        for i, n in enumerate(node.body):
+            if isinstance(n, ast.Match):
+                match = node.body.pop(i)
+                for case in n.cases:
+                    new_body = []
+                    for b in case.body:
+                        if isinstance(b, list):
+                            new_body.extend(b)
+                        else:
+                            new_body.append(b)
+
+                    node.body.append(
+                        ast.FunctionDef(
+                            case.pattern.value
+                            if isinstance(case.pattern, ast.Constant)
+                            else case.pattern.id,
+                            ast.arguments(
+                                posonlyargs=[],
+                                args=[
+                                    ast.Name("self"),
+                                    # ast.Name("frame"),
+                                    # ast.Name("cframe"),
+                                    # ast.Name("stack_pointer"),
+                                    # ast.Name("opcode"),
+                                    # ast.Name("oparg"),
+                                    # ast.Name("tstate"),
+                                    # ast.Name("names"),
+                                    # ast.Name("kwnames"),
+                                    # ast.Name("consts"),
+                                ],
+                                defaults=[],
+                                kwonlyargs=[],
+                            ),
+                            body=new_body,
+                            decorator_list=[],
+                            lineno=0,
+                        )
+                    )
+                break
+
+        for i, n in enumerate(node.body):
+            node.body[i] = self.visit(n)
+
+        return node
+
+
+class FixupConstantsVisitor(
+    ast.NodeTransformer
+):  # pylint: disable=too-many-public-methods
+    def filter_body(self, body):
+        new_body = []
+        for b in body:
+            if (
+                isinstance(b, ast.Expr)
+                and hasattr(b, "value")
+                and isinstance(b.value, ast.Constant)
+            ):
+                continue
+            new_body.append(b)
+        return new_body
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> Any:
+        for i, n in enumerate(node.body):
+            node.body[i] = self.visit(n)
+        node.body = self.filter_body(node.body)
+        if not node.body:
+            node.body = [ast.Pass()]
+        return node
+
+    def visit_If(self, node: ast.If) -> Any:
+        for i, n in enumerate(node.body):
+            node.body[i] = self.visit(n)
+        for i, n in enumerate(node.orelse):
+            node.orelse[i] = self.visit(n)
+
+        node.body = self.filter_body(node.body)
+        if not node.body:
+            node.body = [ast.Pass()]
+        node.orelse = self.filter_body(node.orelse)
+
+        return node
+
+    def visit_For(self, node: ast.For) -> Any:
+        for i, n in enumerate(node.body):
+            node.body[i] = self.visit(n)
+        node.body = self.filter_body(node.body)
+        if not node.body:
+            node.body = [ast.Pass()]
+        return node
+
+
+class FixupCallAssignVisitor(ast.NodeTransformer):
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> Any:
+        for i, n in enumerate(node.body):
+            if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Call):
+                call = ast.unparse(n.targets[0])
+                value = ast.unparse(n.value)
+                node.body[i] = ast.parse(f"raise {call} == {value}")
+            if "static_assert" in ast.unparse(n):
+                node.body[i] = ast.Assert(n.value.args[0], n.value.args[1])
+        return node
+
+
+class FixupNullVisitor(ast.NodeTransformer):  # pylint: disable=too-many-public-methods
+    def __init__(self, field_names):
+        self.field_names = field_names
+
+    # def visit_FunctionDef(self, node: ast.FunctionDef) -> Any:
+    #     for i, n in enumerate(node.body):
+    #         node.body[i] = self.visit(n)
+    #     return node
+
+    def visit_Name(self, node: ast.Name) -> Any:
+        if node.id == "NULL":
+            node.id = "None"
+        if node.id == "true":
+            node.id = "True"
+        if node.id in self.field_names:
+            node.id = f"self.{node.id}"
+        return node

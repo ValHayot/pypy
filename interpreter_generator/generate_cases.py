@@ -15,9 +15,7 @@ import typing
 import parser
 from parser import StackEffect
 
-DEFAULT_INPUT = os.path.relpath(
-    os.path.join(os.path.dirname(__file__), "bytecodes.c")
-)
+DEFAULT_INPUT = os.path.relpath(os.path.join(os.path.dirname(__file__), "bytecodes.c"))
 DEFAULT_OUTPUT = os.path.relpath(
     os.path.join(os.path.dirname(__file__), "generated_cases.h")
 )
@@ -209,7 +207,9 @@ class Instruction:
                 else:
                     typ = f"uint{bits}_t "
                     func = f"read_u{bits}"
-                out.emit(f"{typ}{ceffect.name} = {func}(&next_instr[{cache_offset}].cache);")
+                out.emit(
+                    f"{typ}{ceffect.name} = {func}(&next_instr[{cache_offset}].cache);"
+                )
             cache_offset += ceffect.size
         assert cache_offset == self.cache_offset + cache_adjust
 
@@ -718,8 +718,9 @@ def main():
         sys.exit(f"Found {a.errors} errors")
     a.write_instructions()  # Raises OSError if output can't be written
 
-    with open("interpreter.c.tmpl") as template, open(a.output_filename) as generated, open(
-            "generated_cases.c", "w") as final:
+    with open("interpreter.c.tmpl") as template, open(
+        a.output_filename
+    ) as generated, open("generated_cases.c", "w") as final:
         final.write(template.read().replace("/*CASES*/", generated.read()))
 
 
