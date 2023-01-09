@@ -20,7 +20,7 @@ DEFAULT_INPUT = os.path.relpath(
     os.path.join(os.path.dirname(__file__), "generated_cases.c")
 )
 DEFAULT_OUTPUT = os.path.relpath(
-    os.path.join(os.path.dirname(__file__), "../interpreter.py")
+    os.path.join(os.path.dirname(__file__), "../interpreter/interpreter.py")
 )
 
 
@@ -414,5 +414,4 @@ if __name__ == "__main__":
         "-o", "--output", type=str, help="Generated code", default=DEFAULT_OUTPUT
     )
     args = arg_parser.parse_args()
-    main()
     translate_to_py(args.input, args.output)
